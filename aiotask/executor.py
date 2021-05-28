@@ -1,6 +1,7 @@
 import logging
 from threading import Thread
 import itertools
+import signal
 import multiprocessing as mp
 from . import task_manager
 
@@ -52,15 +53,27 @@ def dummy(args):
 class ProcessPoolExecutor(BaseExecutor):
     pool_class = mp.Pool
 
-    def __init__(
-        self, task_mgr: task_manager.TaskManager, pool_args=None, pool_kwargs=None
-    ):
+    def __init__(self, task_mgr: task_manager.TaskManager, pool_kwargs=None):
+        def disable_sigint(initfunc, initargs):
+            # Ignore SIGINT, SIGTERM: it just messes up the pool.
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            if initfunc:
+                initfunc(*initargs)
+
         super().__init__(task_mgr)
-        self.pool = self.__class__.pool_class(*(pool_args or []), **(pool_kwargs or {}))
+        if pool_kwargs is None:
+            pool_kwargs = {}
+        orig_initializer = pool_kwargs.pop("initializer", None)
+        orig_initargs = pool_kwargs.pop("initargs", None)
+        pool_kwargs["initializer"] = disable_sigint
+        pool_kwargs["initargs"] = orig_initializer, orig_initargs
+
+        self.pool = self.__class__.pool_class(**pool_kwargs)
 
     def close_pool(self):
         if self.pool is not None:
-            self.pool.close()
+            self.pool.terminate()
             self.pool.join()
             self.pool = None
 
