@@ -100,7 +100,9 @@ class ServerProtocol(protocol.BaseProtocol):
         else:
             logger.warning("Received invalid TLV of type %d. Ignoring.", tlv.typ)
 
-    def __del__(self):
+    def connection_lost(self, exn):
+        super().connection_lost(exn)
+        # Cancel all running tasks
         for task in self._tasks_running.values():
             task.cancel()
         self.task_mgr.cancel_tasks(self._tasks_running.keys())

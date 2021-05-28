@@ -84,24 +84,32 @@ class TaskManager:
             for tid in tids:
                 try:
                     self.pending.remove(tid)
-                    self.tasks.pop(tid)
                 except ValueError:
+                    pass
+                try:
+                    self.tasks.pop(tid)
+                except KeyError:
                     pass
 
     def task_complete(self, task_id: uuid.UUID, task_result):
         """ To be called upon task completion. Thread-safe. """
+
+        def set_future_result(future, result):
+            if not future.cancelled():
+                future.set_result(result)
+
         try:
             self.tasks_done.add(task_id)
             task = self.tasks.pop(task_id)
-            self._event_loop.call_soon_threadsafe(task.future.set_result, task_result)
-        except KeyError:
             self._event_loop.call_soon_threadsafe(
-                task.future.set_exception, self.__class__.TaskCancelled(task_id)
+                set_future_result, task.future, task_result
             )
+        except KeyError:
+            pass  # was cancelled
 
     def iterate_tasks(self, timeout=0.1, max_iterate=None):
-        """Iterate over tasks, popping them from the pending tasks on the go. Returns
-        when all tasks are consumed. Thread-safe.
+        """Iterate over tasks, popping them from the pending tasks on the go. Yields
+        pairs (task_id, task). Returns when all tasks are consumed. Thread-safe.
 
         When the tasks are exhausted, wait `timeout` seconds for a new task before
         returning -- use 0 to avoid this behaviour, or None to wait forever.
@@ -124,8 +132,11 @@ class TaskManager:
                 to_yield = self.pending[:MAX_BUFFER]
                 self.pending = self.pending[MAX_BUFFER:]
             iterated += len(to_yield)
-            for elt in to_yield:
-                yield elt
+            for tid in to_yield:
+                task = self.tasks.get(tid, None)
+                if task is not None:
+                    yield (tid, task)
+                # else, the task was cancelled.
             if max_iterate is not None and iterated >= max_iterate:
                 logger.debug("Stopping iteration")
                 break

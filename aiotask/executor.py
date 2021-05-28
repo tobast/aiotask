@@ -1,5 +1,6 @@
 import logging
 from threading import Thread
+import itertools
 import multiprocessing as mp
 from . import task_manager
 
@@ -68,11 +69,12 @@ class ProcessPoolExecutor(BaseExecutor):
         self.close_pool()
 
     def _tasks_iterator(self):
-        def tid_to_args(tid):
-            task = self.task_mgr.tasks[tid]
+        def tid_to_args(tid, task):
             return (tid, task.task)
 
-        return map(tid_to_args, self.task_mgr.iterate_tasks(max_iterate=1024))
+        return itertools.starmap(
+            tid_to_args, self.task_mgr.iterate_tasks(max_iterate=1024)
+        )
 
     def run_tasks(self):
         assert self.pool is not None
