@@ -145,8 +145,10 @@ class TaskManager:
     def wait_tasks(self, timeout=None) -> bool:
         """ Wait for the presence of pending tasks. Blocking, thread-safe. """
         with self.tasks_lock:
+            if self.pending:
+                return True
             if timeout is None:
                 while not self.pending:
-                    return self.tasks_lock.wait()
-            else:
-                return self.tasks_lock.wait(timeout=timeout)
+                    self.tasks_lock.wait()
+                return True
+            return self.tasks_lock.wait(timeout=timeout)
