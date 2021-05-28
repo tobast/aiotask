@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Set
 from threading import Condition
 from aiotask import constants
 
@@ -32,10 +32,18 @@ class TaskManager:
         def __str__(self):
             return "Task ID {} already in use".format(self.tid)
 
+    class TaskCancelled(Exception):
+        def __init__(self, tid):
+            self.tid = tid
+
+        def __str__(self):
+            return "Task {} has been cancelled".format(self.tid)
+
     def __init__(self):
         self.tasks: Dict[uuid.UUID, self.TaskState] = {}
         self.pending: List[uuid.UUID] = []
         self.tasks_lock = Condition()
+        self.tasks_done: Set[uuid.UUID] = set()
         self._event_loop = None
 
     def set_event_loop(self, event_loop):
@@ -43,6 +51,16 @@ class TaskManager:
         called if the event loop changes during the execution of the task manager. If a
         task is run before this method is called, the running event loop is picked."""
         self._event_loop = event_loop
+
+    def task_status(self, tid: uuid.UUID) -> constants.TaskStatus:
+        if tid in self.tasks_done:
+            return constants.TaskStatus.DONE
+        with self.tasks_lock:
+            if tid not in self.tasks:
+                return constants.TaskStatus.NOT_FOUND
+            if tid in self.pending:
+                return constants.TaskStatus.IN_QUEUE
+            return constants.TaskStatus.PROCESSING
 
     def _add_task(self, tid: uuid.UUID, task) -> asyncio.Future:
         if tid in self.tasks:
@@ -59,11 +77,27 @@ class TaskManager:
             self.set_event_loop(asyncio.get_running_loop())
         return await self._add_task(tid, task)
 
-    def task_complete(self, task_id, task_result):
+    def cancel_tasks(self, tids: Sequence[uuid.UUID]):
+        """Cancel the execution of a list of tasks. If their execution is already
+        scheduled, their result will be ignored."""
+        with self.tasks_lock:
+            for tid in tids:
+                try:
+                    self.pending.remove(tid)
+                    self.tasks.pop(tid)
+                except ValueError:
+                    pass
+
+    def task_complete(self, task_id: uuid.UUID, task_result):
         """ To be called upon task completion. Thread-safe. """
-        task = self.tasks[task_id]
-        self._event_loop.call_soon_threadsafe(task.future.set_result, task_result)
-        del task
+        try:
+            self.tasks_done.add(task_id)
+            task = self.tasks.pop(task_id)
+            self._event_loop.call_soon_threadsafe(task.future.set_result, task_result)
+        except KeyError:
+            self._event_loop.call_soon_threadsafe(
+                task.future.set_exception, self.__class__.TaskCancelled(task_id)
+            )
 
     def iterate_tasks(self, timeout=0.1, max_iterate=None):
         """Iterate over tasks, popping them from the pending tasks on the go. Returns
@@ -83,7 +117,6 @@ class TaskManager:
         while True:
             to_yield = []
             with self.tasks_lock:
-                logger.debug("Waiting for pending tasks in iteration")
                 if not self.pending and not self.tasks_lock.wait(timeout):
                     logger.debug("No pending tasks")
                     break
@@ -100,7 +133,6 @@ class TaskManager:
 
     def wait_tasks(self, timeout=None) -> bool:
         """ Wait for the presence of pending tasks. Blocking, thread-safe. """
-        logger.debug("Waiting for pending tasks in iteration")
         with self.tasks_lock:
             if timeout is None:
                 while not self.pending:
