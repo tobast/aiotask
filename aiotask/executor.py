@@ -54,7 +54,7 @@ class BaseExecutor(Thread):
 
 
 class ProcessPoolExecutor(BaseExecutor):
-    pool_class = mp.pool.Pool
+    pool_class: ty.Any = mp.pool.Pool
 
     def __init__(self, task_mgr: task_manager.TaskManager, pool_kwargs=None):
         def disable_sigint(initfunc, initargs):
