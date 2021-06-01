@@ -3,9 +3,15 @@ from threading import Thread
 import itertools
 import signal
 import multiprocessing as mp
+import typing as ty
+import uuid
 from . import task_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _dummy_executor_fct(args: ty.Tuple[uuid.UUID, bytes]):
+    return args
 
 
 class BaseExecutor(Thread):
@@ -14,12 +20,14 @@ class BaseExecutor(Thread):
     """ The function to be called on task values. This function is called with two
     arguments: the task id, and the task value. It must return a tuple of
     `(task_id, task_result)`. """
-    task_fct = None
+    task_fct: ty.Callable[
+        [ty.Tuple[uuid.UUID, bytes]], ty.Tuple[uuid.UUID, bytes]
+    ] = _dummy_executor_fct
 
     def __init__(self, task_mgr: task_manager.TaskManager):
         super().__init__()
         self.task_mgr = task_mgr
-        self._run = True
+        self._run: bool = True
 
     def close(self):
         """Closes the executor after its current tasks are processed. Non-blocking.
@@ -45,13 +53,8 @@ class BaseExecutor(Thread):
         pass
 
 
-def dummy(args):
-    tid, task = args
-    return (tid, task + 1)
-
-
 class ProcessPoolExecutor(BaseExecutor):
-    pool_class = mp.Pool
+    pool_class = mp.pool.Pool
 
     def __init__(self, task_mgr: task_manager.TaskManager, pool_kwargs=None):
         def disable_sigint(initfunc, initargs):

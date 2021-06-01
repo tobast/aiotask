@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import uuid
+import typing as ty
 from . import constants
 from . import protocol
 
@@ -10,24 +11,31 @@ logger = logging.getLogger(__name__)
 class RemoteTask:
     """ A task to be run on a remote server """
 
-    def __init__(self, payload, connection: "Client", loop=None):
+    def __init__(
+        self,
+        payload: bytes,
+        connection: "Client",
+        loop: ty.Optional[asyncio.events.AbstractEventLoop] = None,
+    ):
         self.payload = payload
         self.connection = connection
-        self.event_loop = loop or asyncio.get_running_loop()
+        self.event_loop: asyncio.events.AbstractEventLoop = (
+            loop or asyncio.get_running_loop()
+        )
         self.task_id = uuid.uuid4()
-        self._result_available = self.event_loop.create_future()
-        self._status_update_future = None
-        self.status = constants.TaskStatus.NOT_SUBMITTED
+        self._result_available: asyncio.Future = self.event_loop.create_future()
+        self._status_update_future: ty.Optional[asyncio.Future] = None
+        self.status: constants.TaskStatus = constants.TaskStatus.NOT_SUBMITTED
 
         self.connection.protocol.register_task(self)
 
-    async def run(self):
+    async def run(self) -> bytes:
         """ Run the task on the remote server. Return its result. """
         self.connection.protocol.run_task(self)
         self.status = constants.TaskStatus.IN_QUEUE
         return await self._result_available
 
-    async def query_status(self):
+    async def query_status(self) -> constants.TaskStatus:
         """ Ask the remote end for task status. """
         if self.status in [
             constants.TaskStatus.NOT_SUBMITTED,
@@ -88,7 +96,7 @@ class Client:
         await self._done_running
 
     @property
-    def protocol(self):
+    def protocol(self) -> "ClientProtocol":
         return self._protocol
 
     async def close(self):
@@ -98,12 +106,16 @@ class Client:
 
 
 class ClientProtocol(protocol.BaseProtocol):
-    def __init__(self, event_loop, done_running, *args, **kwargs):
-        super().__init__(event_loop, *args, **kwargs)
+    def __init__(
+        self,
+        event_loop: asyncio.events.AbstractEventLoop,
+        done_running: asyncio.Future,
+    ):
+        super().__init__(event_loop)
         self._done_running = done_running
-        self.tasks = {}
+        self.tasks: ty.Dict[uuid.UUID, RemoteTask] = {}
         self.connected = False
-        self._connected_future = self._event_loop.create_future()
+        self._connected_future: asyncio.Future = self._event_loop.create_future()
 
     def register_task(self, task: RemoteTask):
         self.tasks[task.task_id] = task
@@ -139,14 +151,14 @@ class ClientProtocol(protocol.BaseProtocol):
 
     def tlv_received(self, tlv: protocol.TlvValue):
         if tlv.typ == constants.TlvType.UPDATE:
-            tid, status = tlv.split_uuid()
+            tid, status_bytes = tlv.split_uuid()
             task = self.tasks.get(tid, None)
             if task is None:
                 logger.warning("Received an update for unknown task %s", tid)
                 return  # ignore
 
             try:
-                status_int = int.from_bytes(status, "big")
+                status_int = int.from_bytes(status_bytes, "big")
                 status = constants.TaskStatus(status_int)
             except ValueError:
                 logger.warning(
@@ -160,10 +172,9 @@ class ClientProtocol(protocol.BaseProtocol):
 
         if tlv.typ == constants.TlvType.DONE:
             tid, result = tlv.split_uuid()
-            task = self.tasks.get(tid, None)
+            task = self.tasks.pop(tid, None)
             if task is None:
                 logger.warning("Received a result for unknown task %s", tid)
                 return  # ignore
             task.status = constants.TaskStatus.DONE
             task._result_available.set_result(result)
-            del self.tasks[tid]

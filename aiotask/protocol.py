@@ -2,6 +2,7 @@ import asyncio
 import logging
 import pickle
 import uuid
+import typing as ty
 from .task_manager import TaskManager
 from . import constants
 
@@ -32,11 +33,11 @@ class TlvValue:
         self.value = value
 
     @property
-    def weight(self):
+    def weight(self) -> int:
         """ Weight of this TLV in total bytes to be transmitted """
         return 3 + len(self.value)
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         """ Export this TLV to Python bytes """
         assert 0 <= self.typ < (1 << 7)
         assert len(self.value) < (1 << 15)
@@ -46,7 +47,7 @@ class TlvValue:
             + self.value
         )
 
-    def split_uuid(self):
+    def split_uuid(self) -> ty.Tuple[uuid.UUID, bytes]:
         """ Split the value into UUID and remainder of the payload """
         if len(self.value) < 16:
             raise self.BadTlv("This TLV is too short to contain an UUID")
@@ -54,7 +55,7 @@ class TlvValue:
         return tlv_uuid, self.value[16:]
 
     @classmethod
-    def read_from_buffer(cls, buffer):
+    def read_from_buffer(cls, buffer) -> ty.Tuple[bytes, "TlvValue"]:
         """Read a TLV from buffer. Returns a tuple `(new_buffer, tlv)` where `tlv` is
         a `TlvValue`"""
         if len(buffer) < 3:
@@ -80,13 +81,15 @@ class BaseProtocol(asyncio.Protocol):
     def _debug_id(self):
         return id(self) % 100
 
-    def __init__(self, event_loop, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, event_loop: asyncio.events.AbstractEventLoop):
+        super().__init__()
         self._event_loop = event_loop
         self._pending_data = b""
+        self.transport: ty.Optional[asyncio.Transport] = None
 
-    def connection_made(self, transport):
+    def connection_made(self, transport: asyncio.BaseTransport):
         super().connection_made(transport)
+        assert isinstance(transport, asyncio.Transport)
         logger.debug(
             "[%d] Connected to %s", self._debug_id, transport.get_extra_info("peername")
         )
@@ -96,7 +99,7 @@ class BaseProtocol(asyncio.Protocol):
         super().connection_lost(exn)
         logger.debug("[%d] Connection lost: %s", self._debug_id, exn)
 
-    def data_received(self, data):
+    def data_received(self, data: bytes):
         super().data_received(data)
         logger.debug("[%d] Received data (%d)", self._debug_id, len(data))
         self._pending_data += data
@@ -114,11 +117,12 @@ class BaseProtocol(asyncio.Protocol):
                 self._pending_data = b""
                 break
 
-    def tlv_received(self, tlv):
+    def tlv_received(self, tlv: TlvValue):
         """ Called when a valid TLV is received. To be overridden. """
 
-    def emit_tlv(self, tlv):
+    def emit_tlv(self, tlv: TlvValue):
         """ Called to emit a TLV to the other end. """
+        assert self.transport is not None
         self.transport.write(tlv.to_bytes())
 
     def eof_received(self):

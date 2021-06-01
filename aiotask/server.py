@@ -1,5 +1,7 @@
 import logging
 import asyncio
+import uuid
+import typing as ty
 from . import constants
 from . import protocol
 from .executor import BaseExecutor
@@ -13,7 +15,7 @@ class Server:
 
     def __init__(self, task_mgr: TaskManager, listen_on=None):
         self.listen_on = listen_on
-        self._server = None
+        self._server: ty.Optional["ServerProtocol"] = None
         self.task_mgr = task_mgr
         self._serve_task = None
 
@@ -24,22 +26,31 @@ class Server:
         else:  # assume IPv4/IPv6
             self.is_unix = False
 
-    async def listen(self, start_serving=True):
+    async def listen(self, start_serving: bool = True):
         loop = asyncio.get_running_loop()
-        proto = lambda: ServerProtocol(asyncio.get_running_loop(), self.task_mgr)
+
+        def proto_factory() -> "ServerProtocol":
+            return ServerProtocol(loop, self.task_mgr)
+
         if not self.is_unix:
             host, port = self.listen_on or (None, None)
-            self._server = await loop.create_server(
-                proto,
-                host=host,
-                port=port,
-                start_serving=start_serving,
+            self._server = ty.cast(
+                "ServerProtocol",
+                await loop.create_server(
+                    proto_factory,
+                    host=host,
+                    port=port,
+                    start_serving=start_serving,
+                ),
             )
         else:
-            self._server = await loop.create_unix_server(
-                proto,
-                path=self.listen_on,
-                start_serving=start_serving,
+            self._server = ty.cast(
+                "ServerProtocol",
+                await loop.create_unix_server(
+                    proto_factory,
+                    path=self.listen_on,
+                    start_serving=start_serving,
+                ),
             )
 
     async def serve(self):
@@ -68,11 +79,15 @@ class Server:
 
 
 class ServerProtocol(protocol.BaseProtocol):
-    def __init__(self, event_loop, task_mgr: TaskManager, *args, **kwargs):
-        super().__init__(event_loop, *args, **kwargs)
+    def __init__(
+        self,
+        event_loop: asyncio.events.AbstractEventLoop,
+        task_mgr: TaskManager,
+    ):
+        super().__init__(event_loop)
         logger.info("New server spawned")
-        self.task_mgr = task_mgr
-        self._tasks_running = {}
+        self.task_mgr: TaskManager = task_mgr
+        self._tasks_running: ty.Dict[uuid.UUID, ty.Awaitable[bytes]] = {}
 
     async def _process_enqueue(self, tlv: protocol.TlvValue):
         tid, payload = tlv.split_uuid()
