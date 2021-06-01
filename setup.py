@@ -16,7 +16,7 @@ def parse_requirements():
 
 setup(
     name="aiotask",
-    version="0.0.1",
+    version="0.0.2",
     description="A remote, non-distributed, simple asynchronous task queue",
     author="Théophile 'tobast' Bastian",
     license="LICENSE",
