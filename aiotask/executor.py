@@ -53,23 +53,24 @@ class BaseExecutor(Thread):
         pass
 
 
+def _disable_sigint(initfunc, initargs):
+    # Ignore SIGINT, SIGTERM: it just messes up the pool.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if initfunc:
+        initfunc(*initargs)
+
+
 class ProcessPoolExecutor(BaseExecutor):
     pool_class: ty.Any = mp.pool.Pool
 
     def __init__(self, task_mgr: task_manager.TaskManager, pool_kwargs=None):
-        def disable_sigint(initfunc, initargs):
-            # Ignore SIGINT, SIGTERM: it just messes up the pool.
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            if initfunc:
-                initfunc(*initargs)
-
         super().__init__(task_mgr)
         if pool_kwargs is None:
             pool_kwargs = {}
         orig_initializer = pool_kwargs.pop("initializer", None)
         orig_initargs = pool_kwargs.pop("initargs", None)
-        pool_kwargs["initializer"] = disable_sigint
+        pool_kwargs["initializer"] = _disable_sigint
         pool_kwargs["initargs"] = orig_initializer, orig_initargs
 
         self.pool = self.__class__.pool_class(**pool_kwargs)
