@@ -64,6 +64,8 @@ class Server:
             except asyncio.CancelledError:
                 pass
             finally:
+                if not self._serve_task.done():
+                    self._serve_task.cancel()
                 self._serve_task = None
         logger.debug("Done serving.")
         await self._server.wait_closed()
@@ -73,8 +75,7 @@ class Server:
         assert self._server is not None
         if self._serve_task is not None:
             self._serve_task.cancel()
-        else:
-            self._server.close()
+        self._server.close()
         await self._server.wait_closed()
 
 
